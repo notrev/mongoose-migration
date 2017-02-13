@@ -26,11 +26,13 @@ program
 program
   .command('down [number_of_migrations] (default = 1)')
   .description('Migrate down')
+  .option('-e, --environment [environment]', 'Which environment to use')
   .action(migrate.bind(null, 'down', process.exit));
 
 program
   .command('up [number_of_migrations]')
   .description('Migrate up (default command)')
+  .option('-e, --environment [environment]', 'Which environment to use')
   .action(migrate.bind(null, 'up', process.exit));
 
 program.version(require('../package.json').version);
@@ -38,7 +40,7 @@ program.parse(process.argv);
 
 // Default command ?
 if (program.rawArgs.length < 3) {
-  migrate('up', process.exit, Number.POSITIVE_INFINITY);
+  migrate('up', process.exit, Number.POSITIVE_INFINITY, {});
 }
 
 /*
@@ -62,8 +64,8 @@ function loadConfiguration() {
   }
 }
 
-function updateTimestamp(timestamp, cb) {
-  CONFIG.current_timestamp = timestamp;
+function updateTimestamp(timestamp, environment, cb) {
+  CONFIG.current_timestamp[environment] = timestamp;
   var data = JSON.stringify(CONFIG, null, 2);
   fs.writeFile(config_path, data, cb);
 }
@@ -81,7 +83,7 @@ function init() {
         default: 'migrations'
       },
       connection: {
-        description: 'Enter mongo connection string',
+        description: 'Enter mongo connection string for default environment',
         type: 'string',
         required: true
       }
@@ -92,8 +94,12 @@ function init() {
   prompt.get(schema, function (error, result) {
     CONFIG = {
       basepath: result.basepath,
-      connection: result.connection,
-      current_timestamp: 0,
+      connection: {
+        default: result.connection
+      },
+      current_timestamp: {
+        default: 0
+      },
       models: {}
     };
 
@@ -125,10 +131,10 @@ function createMigration(description) {
   process.exit();
 }
 
-function connnectDB() {
+function connnectDB(environment) {
   // load local app mongoose instance
   var mongoose = require(process.cwd() + '/node_modules/mongoose');
-  mongoose.connect(CONFIG.connection);
+  mongoose.connect(CONFIG.connection[environment]);
   // mongoose.set('debug', true);
 }
 
@@ -140,7 +146,7 @@ function getTimestamp(name) {
   return parseInt((name.split('-'))[0]);
 }
 
-function migrate(direction, cb, number_of_migrations) {
+function migrate(direction, cb, number_of_migrations, options) {
 
   CONFIG = loadConfiguration();
 
@@ -148,47 +154,49 @@ function migrate(direction, cb, number_of_migrations) {
     number_of_migrations = 1;
   }
 
+  var environment = options.environment || 'default';
+
   if (direction == 'down') {
     number_of_migrations = -1 * number_of_migrations;
   }
 
   var migrations = fs.readdirSync(CONFIG.basepath);
 
-  connnectDB();
+  connnectDB(environment);
 
   migrations = migrations.filter(function (migration_name) {
     var timestamp = getTimestamp(migration_name);
 
     if (number_of_migrations > 0) {
-      return timestamp > CONFIG.current_timestamp;
+      return timestamp > CONFIG.current_timestamp[environment];
     } else if (number_of_migrations < 0) {
-      return timestamp <= CONFIG.current_timestamp;
+      return timestamp <= CONFIG.current_timestamp[environment];
     }
   });
 
-  loopMigrations(number_of_migrations, migrations, cb);
+  loopMigrations(number_of_migrations, migrations, environment, cb);
 }
 
-function loopMigrations(direction, migrations, cb) {
+function loopMigrations(direction, migrations, environment, cb) {
 
   if (direction == 0 || migrations.length == 0) {
     return cb();
   }
 
   if (direction > 0) {
-    applyMigration('up', migrations.shift(), function () {
+    applyMigration('up', migrations.shift(), environment, function () {
       direction--;
-      loopMigrations(direction, migrations, cb);
+      loopMigrations(direction, migrations, environment, cb);
     });
   } else if (direction < 0) {
-    applyMigration('down', migrations.pop(), function () {
+    applyMigration('down', migrations.pop(), environment, function () {
       direction++;
-      loopMigrations(direction, migrations, cb);
+      loopMigrations(direction, migrations, environment, cb);
     });
   }
 }
 
-function applyMigration(direction, name, cb) {
+function applyMigration(direction, name, environment, cb) {
   var migration = require(process.cwd() + '/' + CONFIG.basepath + '/' + name);
   var timestamp = getTimestamp(name);
 
@@ -203,6 +211,6 @@ function applyMigration(direction, name, cb) {
       timestamp--;
     }
 
-    updateTimestamp(timestamp, cb);
+    updateTimestamp(timestamp, environment, cb);
   }
 }
